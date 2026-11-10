@@ -16,8 +16,10 @@
 
 package com.genymobile.gnirehtet;
 
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.net.ConnectivityManager;
 import android.net.LinkAddress;
 import android.net.LinkProperties;
@@ -47,11 +49,39 @@ public class GnirehtetService extends VpnService {
     // magic value: higher (like 0x8000 or 0xffff) or lower (like 1500) values show poorer performances
     private static final int MTU = 0x4000;
 
+    // hidden sticky broadcast sent by the system when the USB cable state changes
+    private static final String ACTION_USB_STATE = "android.hardware.usb.action.USB_STATE";
+    private static final String EXTRA_USB_CONNECTED = "connected";
+    // switching the USB mode (e.g. to file transfer) briefly reports "disconnected": only stop if it lasts
+    private static final long USB_UNPLUG_CONFIRM_DELAY_MS = 2000;
+
     private final Notifier notifier = new Notifier(this);
     private final Handler handler = new RelayTunnelConnectionStateHandler(this);
 
     private ParcelFileDescriptor vpnInterface = null;
     private Forwarder forwarder;
+
+    private final Runnable confirmUsbUnplugged = new Runnable() {
+        @Override
+        public void run() {
+            if (isRunning() && !isUsbConnected()) {
+                Log.i(TAG, "USB cable unplugged, stopping VPN");
+                close();
+            }
+        }
+    };
+
+    private final BroadcastReceiver usbStateReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            boolean connected = intent.getBooleanExtra(EXTRA_USB_CONNECTED, true);
+            handler.removeCallbacks(confirmUsbUnplugged);
+            if (!connected) {
+                handler.postDelayed(confirmUsbUnplugged, USB_UNPLUG_CONFIRM_DELAY_MS);
+            }
+        }
+    };
+    private boolean usbStateReceiverRegistered;
 
     public static void start(Context context, VpnConfiguration config) {
         Intent intent = new Intent(context, GnirehtetService.class);
@@ -98,6 +128,12 @@ public class GnirehtetService extends VpnService {
         return START_NOT_STICKY;
     }
 
+    @Override
+    public void onDestroy() {
+        unregisterUsbStateReceiver();
+        super.onDestroy();
+    }
+
     private boolean isRunning() {
         return vpnInterface != null;
     }
@@ -106,7 +142,34 @@ public class GnirehtetService extends VpnService {
         notifier.start();
         if (setupVpn(config)) {
             startForwarding();
+            registerUsbStateReceiver();
         }
+    }
+
+    private void registerUsbStateReceiver() {
+        IntentFilter filter = new IntentFilter(ACTION_USB_STATE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // system broadcasts are still delivered to non-exported receivers
+            registerReceiver(usbStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(usbStateReceiver, filter);
+        }
+        usbStateReceiverRegistered = true;
+    }
+
+    private void unregisterUsbStateReceiver() {
+        handler.removeCallbacks(confirmUsbUnplugged);
+        if (usbStateReceiverRegistered) {
+            unregisterReceiver(usbStateReceiver);
+            usbStateReceiverRegistered = false;
+        }
+    }
+
+    private boolean isUsbConnected() {
+        // passing a null receiver just reads the last (sticky) USB state
+        Intent state = registerReceiver(null, new IntentFilter(ACTION_USB_STATE));
+        // if the state is unknown, keep the VPN running rather than cutting the connection
+        return state == null || state.getBooleanExtra(EXTRA_USB_CONNECTED, true);
     }
 
     @SuppressWarnings("checkstyle:MagicNumber")
@@ -190,6 +253,7 @@ public class GnirehtetService extends VpnService {
             return;
         }
 
+        unregisterUsbStateReceiver();
         notifier.stop();
 
         try {
