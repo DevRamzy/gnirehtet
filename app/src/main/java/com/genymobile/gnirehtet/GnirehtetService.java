@@ -203,6 +203,13 @@ public class GnirehtetService extends VpnService {
         builder.setBlocking(true);
         builder.setMtu(MTU);
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Since Android 10, a VPN is considered metered by default when it has no underlying network (e.g. when
+            // gnirehtet is the only connection). Then apps like the Play Store wait for Wi-Fi before downloading.
+            // The traffic goes through the computer over USB, so it is not metered.
+            builder.setMetered(false);
+        }
+
         vpnInterface = builder.establish();
         if (vpnInterface == null) {
             Log.w(TAG, "VPN starting failed, please retry");
