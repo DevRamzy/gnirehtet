@@ -1,11 +1,18 @@
 apply plugin: 'com.android.application'
 
+base {
+    archivesName = "gnirehtet" // change apk name
+}
+
 android {
-    compileSdkVersion rootProject.ext.compileSdkVersion
-    buildToolsVersion rootProject.ext.buildToolsVersion
+    namespace 'com.genymobile.gnirehtet'
+    compileSdk rootProject.ext.compileSdkVersion
+
+    buildFeatures {
+        buildConfig true // BuildConfig.DEBUG is used in IPPacketOutputStream
+    }
 
     defaultConfig {
-        archivesBaseName = "gnirehtet" // change apk name
         applicationId "com.genymobile.gnirehtet"
         minSdkVersion 21
         targetSdkVersion 29
